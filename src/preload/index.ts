@@ -15,7 +15,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeListener('ollama-stream', listener)
     }
-  }
+  },
+
+  // 获取Ollama可用模型列表
+  getOllamaModels: () => ipcRenderer.invoke('get-ollama-models'),
+
+  // 设置当前使用的模型
+  setCurrentModel: (modelName: string) => ipcRenderer.invoke('set-current-model', modelName)
 })
 
 // Function executed when window is loaded

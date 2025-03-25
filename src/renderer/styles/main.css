@@ -1,7 +1,9 @@
 :root {
-  --primary-neon: #ff3798;
-  --secondary-neon: #4deeea;
-  --background: rgba(13, 14, 28, 0.95);
+  --primary-neon: #FF007A; /* Hot pink */
+  --secondary-neon: #00FFB3; /* Bright turquoise */
+  --background: rgba(27, 27, 42, 0.95); /* Dark navy background */
+  --accent-purple: #A700FF; /* Purple accent */
+  --accent-yellow: #FFEA00; /* Yellow accent */
   --text-color: #ffffff;
 }
 

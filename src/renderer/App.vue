@@ -1,5 +1,26 @@
 <template>
   <div class="app-container neon-border">
+    <div class="header">
+      <div class="model-selector">
+        <label for="model-select">Model:</label>
+        <select 
+          id="model-select" 
+          v-model="selectedModel" 
+          @change="changeModel"
+          class="neon-border model-dropdown"
+          :disabled="isProcessing || isLoadingModels"
+        >
+          <option v-if="isLoadingModels" value="">Loading models...</option>
+          <option v-else-if="availableModels.length === 0" value="">No models found</option>
+          <option v-for="model in availableModels" :key="model.name" :value="model.name">
+            {{ model.name }}
+          </option>
+        </select>
+      </div>
+      <button @click="refreshModels" class="refresh-button neon-text" :disabled="isProcessing || isLoadingModels">
+        ⟳
+      </button>
+    </div>
     <div class="chat-container">
       <div class="messages" ref="messagesContainer">
         <div v-for="(message, index) in messages" :key="index" 
@@ -19,7 +40,7 @@
         <button 
           @click="sendMessage" 
           class="send-button neon-text"
-          :disabled="isProcessing || !userInput.trim()"
+          :disabled="isProcessing || !userInput.trim() || availableModels.length === 0"
         >
           Send
         </button>
@@ -36,12 +57,19 @@ const isProcessing = ref(false)
 const messagesContainer = ref<HTMLElement | null>(null)
 let removeStreamListener: (() => void) | null = null
 
+// 模型相关状态
+const selectedModel = ref('llama2')
+const availableModels = ref<any[]>([])
+const isLoadingModels = ref(false)
+
 // 添加类型声明以使用暴露的API
 declare global {
   interface Window {
     electronAPI: {
       chatWithOllama: (messages: any[]) => Promise<any>,
-      onOllamaStream: (callback: (data: any) => void) => () => void
+      onOllamaStream: (callback: (data: any) => void) => () => void,
+      getOllamaModels: () => Promise<any>,
+      setCurrentModel: (modelName: string) => Promise<any>
     }
   }
 }
@@ -58,6 +86,58 @@ const messages = ref<Message[]>([
     content: 'Hi! How can I help you today?'
   }
 ])
+
+// 获取可用模型列表
+async function fetchModels() {
+  isLoadingModels.value = true
+  try {
+    const response = await window.electronAPI.getOllamaModels()
+    if (!response.error && response.data) {
+      availableModels.value = response.data.models || []
+      
+      // 如果有可用模型且当前选择的模型不在列表中，则选择第一个模型
+      if (availableModels.value.length > 0) {
+        const modelNames = availableModels.value.map(model => model.name)
+        if (!modelNames.includes(selectedModel.value)) {
+          selectedModel.value = availableModels.value[0].name
+          await changeModel()
+        }
+      }
+    } else {
+      console.error('Failed to fetch models:', response.message)
+    }
+  } catch (error) {
+    console.error('Error loading models:', error)
+  } finally {
+    isLoadingModels.value = false
+  }
+}
+
+// 更新当前使用的模型
+async function changeModel() {
+  try {
+    await window.electronAPI.setCurrentModel(selectedModel.value)
+    
+    // 添加系统消息通知用户模型已更改
+    messages.value.push({
+      role: 'assistant',
+      content: `Model switched to ${selectedModel.value}`
+    })
+    
+    // 滚动到底部
+    await nextTick()
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    }
+  } catch (error) {
+    console.error('Error changing model:', error)
+  }
+}
+
+// 刷新模型列表按钮
+async function refreshModels() {
+  await fetchModels()
+}
 
 // 设置流式响应监听器
 function setupStreamListener() {
@@ -165,13 +245,16 @@ async function sendMessage() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (messagesContainer.value) {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
   }
   
   // 设置流式响应监听器
   setupStreamListener()
+  
+  // 获取模型列表
+  await fetchModels()
 })
 
 onUnmounted(() => {
@@ -193,12 +276,65 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
+.header {
+  display: flex;
+  align-items: center;
+  padding: 0.8rem 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid var(--accent-purple);
+}
+
+.model-selector {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.model-selector label {
+  margin-right: 0.5rem;
+  color: var(--text-color);
+  font-weight: bold;
+}
+
+.model-dropdown {
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-color);
+  padding: 0.4rem;
+  border-radius: 4px;
+  outline: none;
+  min-width: 150px;
+  border: 1px solid var(--accent-purple);
+  box-shadow: 0 0 5px var(--accent-purple);
+}
+
+.refresh-button {
+  background: transparent;
+  border: none;
+  color: var(--accent-yellow);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  border-radius: 50%;
+  transition: transform 0.3s ease;
+}
+
+.refresh-button:hover:not(:disabled) {
+  text-shadow: 0 0 5px var(--accent-yellow),
+               0 0 10px var(--accent-yellow);
+  transform: rotate(180deg);
+}
+
+.refresh-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .chat-container {
   flex: 1;
   display: flex;
   flex-direction: column;
   padding: 1rem;
-  height: 100%;
+  height: calc(100% - 50px);
   overflow: hidden;
 }
 
@@ -229,7 +365,7 @@ onUnmounted(() => {
 .ai-message {
   background: var(--secondary-neon);
   margin-right: auto;
-  color: white;
+  color: #1B1B2A; /* Dark text for better contrast on light background */
 }
 
 .input-container {
@@ -255,7 +391,7 @@ onUnmounted(() => {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--primary-neon);
+  color: var(--accent-yellow);
   cursor: pointer;
   font-weight: bold;
   transition: all 0.3s ease;
@@ -267,6 +403,8 @@ onUnmounted(() => {
 }
 
 .send-button:not(:disabled):hover {
+  text-shadow: 0 0 5px var(--accent-yellow),
+               0 0 10px var(--accent-yellow);
   transform: translateY(-2px);
 }
 
@@ -280,7 +418,7 @@ onUnmounted(() => {
 }
 
 .messages::-webkit-scrollbar-thumb {
-  background: var(--primary-neon);
+  background: var(--accent-purple);
   border-radius: 3px;
 }
 
@@ -290,7 +428,7 @@ onUnmounted(() => {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background-color: var(--primary-neon);
+  background-color: var(--accent-purple);
   margin-left: 6px;
   animation: pulse 1s infinite;
 }

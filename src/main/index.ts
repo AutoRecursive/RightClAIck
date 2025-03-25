@@ -3,6 +3,8 @@ import { join } from 'path'
 
 let mainWindow: BrowserWindow | null = null
 let ollama: any = null
+// 默认模型
+let currentModel = 'llama2'
 
 async function initOllama() {
   try {
@@ -72,9 +74,9 @@ app.whenReady().then(async () => {
     }
   })
 
-  // Set up IPC handlers for Ollama API
-  ipcMain.handle('chat-with-ollama', async (event, messages) => {
-    if (!mainWindow || !ollama) {
+  // 获取可用模型列表
+  ipcMain.handle('get-ollama-models', async () => {
+    if (!ollama) {
       return {
         error: true,
         message: 'Ollama is not initialized'
@@ -82,9 +84,38 @@ app.whenReady().then(async () => {
     }
 
     try {
-      // 使用流式调用
+      const models = await ollama.list()
+      return {
+        error: false,
+        data: models
+      }
+    } catch (error) {
+      console.error('Error fetching Ollama models:', error)
+      return {
+        error: true,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      }
+    }
+  })
+
+  // 设置当前使用的模型
+  ipcMain.handle('set-current-model', async (_, modelName) => {
+    currentModel = modelName
+    return { success: true, currentModel }
+  })
+
+  // 使用当前选择的模型进行聊天
+  ipcMain.handle('chat-with-ollama', async (_, messages) => {
+    if (!ollama) {
+      return {
+        error: true,
+        message: 'Ollama is not initialized'
+      }
+    }
+
+    try {
       const response = await ollama.chat({
-        model: 'qwen2.5', // 或者其他可用模型
+        model: currentModel, // 使用选择的模型
         messages,
         stream: true
       })
