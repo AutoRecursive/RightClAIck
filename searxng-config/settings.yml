@@ -1,0 +1,51 @@
+use_default_settings: true
+
+server:
+    port: 8080
+    bind_address: "0.0.0.0"
+    secret_key: "8c0yHhNLS4OPl2zK9X5vR3mJ1tQdWfUj"
+    base_url: http://localhost:8080/
+    request_timeout: 10.0
+    limiter: false
+    proxies:
+        http: socks5h://host.docker.internal:7890
+        https: socks5h://host.docker.internal:7890
+    trusted_proxies: []
+
+ui:
+    default_theme: simple
+    default_locale: en
+    results_on_new_tab: true
+    infinite_scroll: true
+    center_alignment: true
+    simple_style: true
+
+search:
+    safe_search: 0
+    autocomplete: "duckduckgo"
+    default_lang: "en"
+    results_on_new_tab: true
+    formats:
+        - html
+        - json
+    allowed_urls:
+        - http://localhost:8080
+        - https://localhost:8080
+
+engines:
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    safe_search: 0
+    timeout: 10.0
+    display:
+        full_content: false
+        deep_links: false
+        results_on_new_tab: true
+    proxies:
+        http: socks5h://host.docker.internal:7890
+        https: socks5h://host.docker.internal:7890
+
+redis:
+    url: false

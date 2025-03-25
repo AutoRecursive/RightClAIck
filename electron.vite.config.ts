@@ -6,7 +6,10 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        external: ['ollama']
+        external: ['ollama', 'axios']
+      },
+      lib: {
+        entry: resolve('src/main/index.ts')
       },
       minify: false,
       sourcemap: 'inline'
@@ -15,7 +18,7 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
-        external: ['ollama']
+        external: ['ollama', 'axios']
       },
       lib: {
         entry: resolve('src/preload/index.ts')

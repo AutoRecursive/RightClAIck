@@ -1,5 +1,8 @@
-import { app, BrowserWindow, globalShortcut, screen, ipcMain } from 'electron'
+import { app, BrowserWindow, globalShortcut, screen, ipcMain, shell } from 'electron'
 import { join } from 'path'
+import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import icon from '../../resources/icon.png?asset'
+import { search, getEngines } from './search'
 
 let mainWindow: BrowserWindow | null = null
 let ollama: any = null
@@ -174,6 +177,27 @@ app.whenReady().then(async () => {
       }
     }
   })
+
+  // Add these IPC handlers before app.whenReady()
+  ipcMain.handle('search', async (_, query: string, engines?: string[]) => {
+    try {
+      const results = await search(query, engines);
+      return results;
+    } catch (error) {
+      console.error('Search error in IPC handler:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('get-engines', async () => {
+    try {
+      const engines = await getEngines();
+      return engines;
+    } catch (error) {
+      console.error('Get engines error in IPC handler:', error);
+      throw error;
+    }
+  });
 })
 
 app.on('window-all-closed', () => {

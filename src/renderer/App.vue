@@ -21,7 +21,33 @@
         ⟳
       </button>
     </div>
-    <div class="chat-container">
+
+    <!-- 添加搜索栏 -->
+    <div class="search-container">
+      <input 
+        v-model="searchQuery"
+        @keyup.enter="performSearch"
+        placeholder="Search the web..."
+        class="search-input neon-border"
+        :disabled="isSearching"
+      />
+      <button 
+        @click="performSearch" 
+        class="search-button neon-text"
+        :disabled="isSearching || !searchQuery.trim()"
+      >
+        Search
+      </button>
+    </div>
+
+    <!-- 添加搜索结果组件 -->
+    <SearchResults 
+      v-if="showSearchResults"
+      :results="searchResults"
+      :isLoading="isSearching"
+    />
+
+    <div class="chat-container" :class="{ 'with-search-results': showSearchResults }">
       <div class="messages" ref="messagesContainer">
         <div v-for="(message, index) in messages" :key="index" 
              :class="['message', message.role === 'user' ? 'user-message' : 'ai-message', message.streaming ? 'streaming' : '']">
@@ -51,6 +77,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick, onUnmounted } from 'vue'
+import SearchResults from './components/SearchResults.vue'
 
 const userInput = ref('')
 const isProcessing = ref(false)
@@ -62,6 +89,12 @@ const selectedModel = ref('llama2')
 const availableModels = ref<any[]>([])
 const isLoadingModels = ref(false)
 
+// 添加搜索相关的状态
+const searchQuery = ref('')
+const searchResults = ref<any[]>([])
+const isSearching = ref(false)
+const showSearchResults = ref(false)
+
 // 添加类型声明以使用暴露的API
 declare global {
   interface Window {
@@ -69,7 +102,8 @@ declare global {
       chatWithOllama: (messages: any[]) => Promise<any>,
       onOllamaStream: (callback: (data: any) => void) => () => void,
       getOllamaModels: () => Promise<any>,
-      setCurrentModel: (modelName: string) => Promise<any>
+      setCurrentModel: (modelName: string) => Promise<any>,
+      search: (query: string) => Promise<any>
     }
   }
 }
@@ -245,6 +279,107 @@ async function sendMessage() {
   }
 }
 
+// 执行搜索
+async function performSearch() {
+  if (!searchQuery.value.trim() || isSearching.value) return
+
+  isSearching.value = true
+  showSearchResults.value = true
+  searchResults.value = []
+
+  try {
+    const response = await window.electronAPI.search(searchQuery.value)
+    
+    if (response.error) {
+      throw new Error(response.message || 'Search failed')
+    }
+
+    searchResults.value = response.data.results || []
+
+    if (searchResults.value.length === 0) {
+      messages.value.push({
+        role: 'assistant',
+        content: 'No results found for your search query.'
+      })
+      return
+    }
+
+    // 将搜索查询和结果发送给 LLM 处理
+    const searchContext = formatSearchResultsForLLM(searchQuery.value, searchResults.value)
+    
+    // 添加用户的搜索消息
+    messages.value.push({
+      role: 'user',
+      content: `Search query: ${searchQuery.value}`
+    })
+
+    // 添加一个空的助手消息用于流式更新
+    messages.value.push({
+      role: 'assistant',
+      content: '',
+      streaming: true
+    })
+
+    isProcessing.value = true
+
+    // 确保滚动到最新消息
+    await nextTick()
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+    }
+
+    try {
+      await window.electronAPI.chatWithOllama([
+        {
+          role: 'system',
+          content: 'You are a helpful assistant. I will provide you with a search query and its results. Please analyze the results and provide a comprehensive summary that answers the user\'s query. Focus on the most relevant information and highlight key points.'
+        },
+        {
+          role: 'user',
+          content: searchContext
+        }
+      ])
+      // 流式响应会通过事件处理程序更新
+    } catch (error) {
+      // 替换空消息为错误消息
+      const lastIndex = messages.value.length - 1
+      messages.value[lastIndex] = {
+        role: 'assistant',
+        content: 'Sorry, I encountered an error analyzing the search results. Please try again.'
+      }
+      isProcessing.value = false
+    }
+  } catch (error) {
+    console.error('Search error:', error)
+    messages.value.push({
+      role: 'assistant',
+      content: error instanceof Error ? error.message : 'An error occurred while performing the search. Please try again.'
+    })
+    searchResults.value = []
+  } finally {
+    isSearching.value = false
+  }
+}
+
+// 格式化搜索结果以供 LLM 处理
+function formatSearchResultsForLLM(query: string, results: any[]): string {
+  let context = `Search Query: "${query}"\n\nSearch Results:\n\n`
+  
+  results.forEach((result, index) => {
+    context += `[Result ${index + 1}]\n`
+    context += `Title: ${result.title}\n`
+    context += `URL: ${result.url}\n`
+    context += `Content: ${result.content}\n`
+    context += `Source: ${result.engine}\n\n`
+  })
+
+  context += `\nPlease analyze these search results and provide a comprehensive answer to the query "${query}". `
+  context += `Focus on the most relevant information and provide a clear, well-structured response. `
+  context += `If the results contain conflicting information, please highlight this and explain the different perspectives.`
+
+  return context
+}
+
 onMounted(async () => {
   if (messagesContainer.value) {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
@@ -267,64 +402,89 @@ onUnmounted(() => {
 
 <style scoped>
 .app-container {
-  width: 100vw;
-  height: 100vh;
-  background: var(--background);
-  border-radius: 8px;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+  height: 100vh;
+  padding: 1rem;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
 }
 
 .header {
   display: flex;
   align-items: center;
-  padding: 0.8rem 1rem;
-  background: rgba(0, 0, 0, 0.2);
-  border-bottom: 1px solid var(--accent-purple);
+  gap: 1rem;
+  margin-bottom: 1rem;
+  background-color: var(--color-bg-primary);
+  padding: 0.5rem;
+  border-radius: 4px;
 }
 
 .model-selector {
   display: flex;
   align-items: center;
-  flex: 1;
+  gap: 0.5rem;
+  background-color: var(--color-bg-primary);
 }
 
 .model-selector label {
   margin-right: 0.5rem;
-  color: var(--text-color);
+  color: var(--color-text-primary);
   font-weight: bold;
 }
 
 .model-dropdown {
-  background: rgba(0, 0, 0, 0.3);
-  color: var(--text-color);
-  padding: 0.4rem;
+  padding: 0.5rem;
   border-radius: 4px;
-  outline: none;
-  min-width: 150px;
-  border: 1px solid var(--accent-purple);
-  box-shadow: 0 0 5px var(--accent-purple);
+  background-color: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-neon-magenta);
 }
 
 .refresh-button {
-  background: transparent;
-  border: none;
-  color: var(--accent-yellow);
-  font-size: 1.2rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--color-neon-magenta);
+  border-radius: 4px;
+  background-color: var(--color-bg-secondary);
+  color: var(--color-neon-green);
+  text-shadow: 0 0 5px var(--color-neon-green);
   cursor: pointer;
-  padding: 0.3rem 0.6rem;
-  border-radius: 50%;
-  transition: transform 0.3s ease;
-}
-
-.refresh-button:hover:not(:disabled) {
-  text-shadow: 0 0 5px var(--accent-yellow),
-               0 0 10px var(--accent-yellow);
-  transform: rotate(180deg);
 }
 
 .refresh-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.search-container {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  background-color: var(--color-bg-primary);
+  padding: 0.5rem;
+  border-radius: 4px;
+}
+
+.search-input {
+  flex: 1;
+  padding: 0.5rem;
+  border-radius: 4px;
+  background-color: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-neon-magenta);
+}
+
+.search-button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--color-neon-magenta);
+  border-radius: 4px;
+  background-color: var(--color-bg-secondary);
+  color: var(--color-neon-green);
+  text-shadow: 0 0 5px var(--color-neon-green);
+  cursor: pointer;
+}
+
+.search-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -333,68 +493,72 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 1rem;
-  height: calc(100% - 50px);
-  overflow: hidden;
+  min-height: 0;
+  margin-top: 1rem;
+  background-color: var(--color-bg-primary);
+  border-radius: 4px;
+  padding: 0.5rem;
 }
 
 .messages {
   flex: 1;
   overflow-y: auto;
+  padding: 1rem;
+  background-color: var(--color-bg-secondary);
+  border-radius: 4px;
   margin-bottom: 1rem;
-  padding-right: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100% - 60px);
+  border: 1px solid var(--color-neon-magenta);
 }
 
 .message {
-  margin-bottom: 0.8rem;
-  padding: 0.8rem;
-  border-radius: 8px;
+  margin-bottom: 1rem;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
   max-width: 80%;
-  word-wrap: break-word;
+  background-color: var(--color-bg-tertiary);
 }
 
 .user-message {
-  background: var(--primary-neon);
+  background-color: var(--color-bg-tertiary);
   margin-left: auto;
-  color: white;
+  color: var(--color-neon-magenta);
+  text-shadow: 0 0 5px var(--color-neon-magenta);
+  border: 1px solid var(--color-neon-magenta);
 }
 
 .ai-message {
-  background: var(--secondary-neon);
+  background-color: var(--color-bg-quaternary);
   margin-right: auto;
-  color: #1B1B2A; /* Dark text for better contrast on light background */
+  color: var(--color-neon-green);
+  text-shadow: 0 0 5px var(--color-neon-green);
+  border: 1px solid var(--color-neon-green);
 }
 
 .input-container {
   display: flex;
   gap: 0.5rem;
+  background-color: var(--color-bg-primary);
+  padding: 0.5rem;
+  border-radius: 4px;
 }
 
 .message-input {
   flex: 1;
-  padding: 0.8rem;
+  padding: 0.5rem;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-color);
-  outline: none;
-}
-
-.message-input::placeholder {
-  color: rgba(255, 255, 255, 0.5);
+  background-color: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-neon-magenta);
 }
 
 .send-button {
-  padding: 0.8rem 1.5rem;
-  border: none;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--color-neon-magenta);
   border-radius: 4px;
-  background: transparent;
-  color: var(--accent-yellow);
+  background: var(--color-bg-secondary);
+  color: var(--color-neon-green);
+  text-shadow: 0 0 5px var(--color-neon-green);
   cursor: pointer;
-  font-weight: bold;
-  transition: all 0.3s ease;
 }
 
 .send-button:disabled {
@@ -402,40 +566,75 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-.send-button:not(:disabled):hover {
-  text-shadow: 0 0 5px var(--accent-yellow),
-               0 0 10px var(--accent-yellow);
-  transform: translateY(-2px);
-}
-
-/* Scrollbar styling */
+/* 添加滚动条样式 */
 .messages::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 
 .messages::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--color-bg-secondary);
+  border-radius: 4px;
 }
 
 .messages::-webkit-scrollbar-thumb {
-  background: var(--accent-purple);
-  border-radius: 3px;
+  background: var(--color-text-secondary);
+  border-radius: 4px;
 }
 
-/* 添加流式输入的样式 */
+.messages::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-primary);
+}
+
+/* 打字动画 */
 .typing-indicator {
   display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background-color: var(--accent-purple);
-  margin-left: 6px;
-  animation: pulse 1s infinite;
+  margin-left: 4px;
 }
 
-@keyframes pulse {
-  0% { opacity: 0.4; }
-  50% { opacity: 1; }
-  100% { opacity: 0.4; }
+.typing-indicator::after {
+  content: '...';
+  animation: typing 1.5s infinite;
+}
+
+@keyframes typing {
+  0% { content: '.'; }
+  33% { content: '..'; }
+  66% { content: '...'; }
+}
+
+/* 霓虹灯效果 */
+.neon-border {
+  border: 1px solid var(--color-neon-magenta);
+  box-shadow: 0 0 5px var(--color-neon-magenta);
+}
+
+.neon-text {
+  color: var(--color-neon-green);
+  text-shadow: 0 0 5px var(--color-neon-green);
+}
+
+.chat-container.with-search-results {
+  height: calc(100vh - 400px);
+}
+</style>
+
+<style>
+/* 暗色主题变量 - 移到全局样式中 */
+:root {
+  --color-bg-primary: #1a1a1a;
+  --color-bg-secondary: #2d2d2d;
+  --color-bg-tertiary: #3d3d3d;
+  --color-bg-quaternary: #4d4d4d;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #a0a0a0;
+  --color-neon-magenta: #ff00ff;
+  --color-neon-green: #00ff9d;
+}
+
+/* 确保根元素有背景色 */
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-bg-primary);
 }
 </style> 
